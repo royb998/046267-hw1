@@ -7,25 +7,36 @@
 #include "math.h"
 #define INSTRUCTION_SIZE  32
 
-enum state {SNT, WNT, WT, ST};
+
+struct btb_entry{
+    int valid;
+    int tag;
+    int target;
+}btb_entry;
 
 struct branch_target_buffer{
-    void* tag;
-    void* target;
-    void* history;
-    void* tableState;
-    void* globalTableState;
+    struct btb_entry* btbTable;
+    unsigned* history;
+    unsigned** tableState;
 
-    unsigned int btbSize;       //num of lines in btb
+    unsigned int btbSize;       //num of lines in btb table
     unsigned int historySize;   //num history bit
     unsigned int tagSize;       //num of tag bit
-    enum state beginState;
+    unsigned beginState;
+
     bool isGlobalHist;
     bool isGlobalTableState;
-    bool usingLGShare;          //relevant only if Global Table State
-
+//    bool usingLGShare;          //relevant only if Global Table State
     int Shared;
 }btb;
+
+
+unsigned getTagFromPc(int btbSize,int tagSize, uint32_t pc){
+    int btbIndexLength = log2(btbSize);
+    unsigned tag = pc >> (2 + btbIndexLength); //allign address
+    return tag % (int)(pow(2, tagSize));
+}
+
 
 int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned fsmState,
 			bool isGlobalHist, bool isGlobalTable, int Shared){
@@ -35,73 +46,65 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
         return -1;
     }
 
-    //creating tag column and zeroing
-    btb->tag = malloc(tagSize * btbSize);
-    if (btb->tag == NULL) {
+    //creating btbTable and zeroing
+    btb->btbTable = malloc(btbSize * ( 1 + tagSize + INSTRUCTION_SIZE ));
+    if (btb->btbTable->tag == NULL) {
         free(btb);
         return -1;
     }
-    memset(btb->tag,0,sizeof (btb->tag));
-
-    //creating target column and zeroing
-    btb->target = malloc((INSTRUCTION_SIZE) * btbSize);
-    if (btb->target == NULL) {
-        free(btb->tag);
-        free(btb);
-        return -1;
-    }
-    memset(btb->target,0,sizeof (btb->target));
+    memset(btb->btbTable,0,sizeof (btb->btbTable->tag));
 
 
     //creating History and zeroing
     if(isGlobalHist) {
-        btb->history = malloc(historySize);                        //if global history, size= historysize
+        btb->history = malloc(sizeof(unsigned));                        //if global history, size= 8
         if (btb->history == NULL) {
-            free(btb->target);
-            free(btb->tag);
+            free(btb->btbTable);
             free(btb);
             return -1;
         }
     }
     else{
-        btb->history = malloc(historySize * btbSize);             //if local History, size = historysize*btbsize
+        btb->history = malloc(sizeof(unsigned) * btbSize);             //if local History, size = 8*btbsize
         if (btb->history == NULL) {
-            free(btb->target);
-            free(btb->tag);
+            free(btb->btbTable);
             free(btb);
             return -1;
         }
     }
-    memset(btb->history,0,sizeof (btb->history));
+    memset(btb->history,0,sizeof (*btb->history));
 
 
     //creating state table
     if (isGlobalTable) {                                               //if stateTable is global, size = 2*2^historysize
-        btb->tableState = malloc(sizeof(enum state) * pow(2,historySize));
+        btb->tableState = malloc(sizeof(unsigned) * pow(2,historySize));
         if (btb->tableState == NULL) {
             free(btb->history);
-            free(btb->target);
-            free(btb->tag);
+            free(btb->btbTable);
             free(btb);
             return -1;
         }
     }
     else{                                                               //if stateTable is local, size =2*2^btbsize
-        btb->tableState = malloc(sizeof(enum state) * btbSize);
+        btb->tableState = malloc(sizeof(unsigned) * btbSize);
         if (btb->tableState == NULL) {
             free(btb->history);
-            free(btb->target);
-            free(btb->tag);
+            free(btb->btbTable);
             free(btb);
             return -1;
         }
     }
 
     //filling table state with begin state
-    enum state *stateArray = (enum state *)btb->tableState;
-    size_t stateArraySize = isGlobalTable ? pow(2, historySize) : btbSize;
-    for (size_t i = 0; i < stateArraySize; ++i) {
-        stateArray[i] = fsmState;
+    if (isGlobalTable){
+        for (int i = 0; i < pow(2, historySize); i++)
+            btb->tableState[0][i] = fsmState;
+    }
+    else{
+        for (int j = 0; j < btbSize; j++){
+            for (int i = 0; i < pow(2, historySize); i++)
+                btb->tableState[j][i] = fsmState;
+        }
     }
 
     btb->btbSize = btbSize;
@@ -111,6 +114,8 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
     btb->isGlobalHist = isGlobalHist;
     btb->isGlobalTableState = isGlobalTable;
     btb->Shared=Shared;
+
+    SIM_stats stats = {0, 0, 0};
 
 	return 0;
 }
