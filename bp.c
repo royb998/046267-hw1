@@ -7,7 +7,6 @@
 #include "math.h"
 #define INSTRUCTION_SIZE  32
 
-
 struct btb_entry{
     int valid;
     int tag;
@@ -26,36 +25,40 @@ struct branch_target_buffer{
 
     bool isGlobalHist;
     bool isGlobalTableState;
-//    bool usingLGShare;          //relevant only if Global Table State
+//  bool usingLGShare;          //relevant only if Global Table State
     int Shared;
-}btb;
+    SIM_stats stats;
 
+};
+
+struct branch_target_buffer *btb;
 
 unsigned getTagFromPc(int btbSize,int tagSize, uint32_t pc){
-    int btbIndexLength = log2(btbSize);
-    unsigned tag = pc >> (2 + btbIndexLength); //allign address
+    int lenIndex = (int)log2(btbSize);
+    unsigned tag = pc >> (2 + lenIndex); //align address
     return tag % (int)(pow(2, tagSize));
 }
 
 
 int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned fsmState,
 			bool isGlobalHist, bool isGlobalTable, int Shared){
+    unsigned int size = 0;
+//    struct branch_target_buffer* btb = (struct branch_target_buffer*)malloc(sizeof(struct branch_target_buffer));
+//    if (btb == NULL) {
+//        return -1;
+//    }
 
-    struct branch_target_buffer* btb = (struct branch_target_buffer*)malloc(sizeof(struct branch_target_buffer));
-    if (btb == NULL) {
-        return -1;
-    }
-
-    //creating btbTable and zeroing
+    //////////////////////////////////////creating btbTable and zeroing////////////////////////////////////
     btb->btbTable = malloc(btbSize * ( 1 + tagSize + INSTRUCTION_SIZE ));
     if (btb->btbTable->tag == NULL) {
         free(btb);
         return -1;
     }
     memset(btb->btbTable,0,sizeof (*btb->btbTable));
+    size += 1 + tagSize + INSTRUCTION_SIZE;
 
 
-    //creating History and zeroing
+    //////////////////////////////////////creating History and zeroing////////////////////////////////////
     if(isGlobalHist) {
         btb->history = malloc(sizeof(unsigned));                        //if global history, size= 8
         if (btb->history == NULL) {
@@ -63,6 +66,7 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
             free(btb);
             return -1;
         }
+        size += historySize;
     }
     else{
         btb->history = malloc(sizeof(unsigned) * btbSize);             //if local History, size = 8*btbsize
@@ -71,11 +75,13 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
             free(btb);
             return -1;
         }
+        size += btbSize * historySize;
     }
     memset(btb->history,0,sizeof (*btb->history));
 
 
-    //creating state table
+
+    ///////////////////////////////////creating state table/////////////////////////////////////////////////
     if (isGlobalTable) {                                               //if stateTable is global, size = 2*2^historysize
         btb->tableState = malloc(sizeof(unsigned) * pow(2,historySize));
         if (btb->tableState == NULL) {
@@ -84,6 +90,7 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
             free(btb);
             return -1;
         }
+        size += pow(2, (historySize + 1));
     }
     else{                                                               //if stateTable is local, size =2*2^btbsize
         btb->tableState = malloc(sizeof(unsigned) * btbSize);
@@ -93,12 +100,16 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
             free(btb);
             return -1;
         }
+        size += btbSize * (int)pow(2, (historySize + 1));
     }
 
-    //filling table state with begin state
+
+
+    /////////////////////////////////////filling table state with begin state////////////////////////////////////
     if (isGlobalTable){
-        for (int i = 0; i < pow(2, historySize); i++)
+        for (int i = 0; i < pow(2, historySize); i++){
             btb->tableState[0][i] = fsmState;
+        }
     }
     else{
         for (int j = 0; j < btbSize; j++){
@@ -107,6 +118,8 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
         }
     }
 
+
+    ////////////////////////////////////initialising values////////////////////////////////////
     btb->btbSize = btbSize;
     btb->historySize = historySize;
     btb->tagSize = tagSize;
@@ -115,13 +128,16 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
     btb->isGlobalTableState = isGlobalTable;
     btb->Shared=Shared;
 
-    SIM_stats stats = {0, 0, 0};
+    //initializing stats
+    btb->stats.br_num=0;
+    btb->stats.flush_num=0;
+    btb->stats.size = size;
 
 	return 0;
 }
 
 bool BP_predict(uint32_t pc, uint32_t *dst){
-    int upperBit = (int)log2(btb.btbSize);
+    int upperBit = (int)log2(btb->btbSize);
     int mask = ((1<<upperBit)-1)>>2;
     int index = pc & mask  >> 2; // We got the index of the instruction in the btb
 
@@ -133,6 +149,13 @@ void BP_update(uint32_t pc, uint32_t targetPc, bool taken, uint32_t pred_dst){
 }
 
 void BP_GetStats(SIM_stats *curStats){
+    curStats->br_num = btb->stats.br_num;
+    curStats->flush_num = btb->stats.flush_num;
+    curStats->size = btb->stats.size;
+
+    free(btb->btbTable);
+    free(btb->history);
+    free(btb->tableState);
     return;
 }
 
