@@ -52,7 +52,7 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
         free(btb);
         return -1;
     }
-    memset(btb->btbTable,0,sizeof (btb->btbTable->tag));
+    memset(btb->btbTable,0,sizeof (*btb->btbTable));
 
 
     //creating History and zeroing
