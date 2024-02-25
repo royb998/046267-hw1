@@ -364,13 +364,13 @@ void BP_update(uint32_t pc, uint32_t targetPc, bool taken, uint32_t pred_dst)
     btb_entry->target = targetPc;
     btb_entry->valid = true;
 
+    // Update FSM.
+    update_branch_state(pc, taken);
+
     // Update history register.
     g_btb.history[history_register_index] <<= 1;
     g_btb.history[history_register_index] |= taken ? 1 : 0;
     g_btb.history[history_register_index] &= (1 << g_btb.historySize) - 1;
-
-    // Update FSM.
-    update_branch_state(pc, taken);
 }
 
 void BP_GetStats(SIM_stats * curStats)
