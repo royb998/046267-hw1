@@ -135,7 +135,6 @@ int main(int argc, char ** argv)
         printf("%c ", (BP_predict(pc, &dst) ? 'T' : 'N'));
         printf("0x%x\n", dst);
 
-
         BP_update(pc, targetPc, taken, dst);
     }
 

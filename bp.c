@@ -11,10 +11,12 @@
 #define FREE(_ptr)          \
 do {                        \
     if ((_ptr) != NULL) {   \
-        free(_ptr);         \
+        free((_ptr));       \
 }} while(0)
 
-#define INSTRUCTION_SIZE  32
+#define INSTRUCTION_SIZE  (32)
+
+#define FSM_MASK (0x0000000000000003)
 
 /* ----- Structs ----- */
 
@@ -28,7 +30,7 @@ typedef struct btb_entry
 struct branch_target_buffer
 {
     struct btb_entry * btbTable;
-    unsigned * history;
+    size_t * history;
     size_t * tableState;
 //    unsigned ** tableState;
 
@@ -60,7 +62,7 @@ unsigned getTagFromPc(unsigned btbSize, unsigned tagSize, uint32_t pc)
 unsigned getBtbIndex(uint32_t pc)
 {
     unsigned index = pc >> 2;
-    return index % (unsigned)(pow(2, log2(g_btb.btbSize)));
+    return index % g_btb.btbSize;
 }
 
 unsigned getStateIndex(uint32_t pc)
@@ -91,12 +93,26 @@ unsigned getStateIndex(uint32_t pc)
         n = g_btb.history[btbIndex];
     }
 
+    // Ensure correct history register size.
+    n %= (1 << g_btb.historySize);
+
     return n ^ shareValue;
 }
 
 size_t get_state_table_size(size_t history_size)
 {
-    return 1 << history_size;
+    return (1 << history_size);
+}
+
+void reset_branch_states(uint32_t pc)
+{
+    size_t table_index = g_btb.isGlobalTableState ? 0 : getBtbIndex(pc);
+    size_t table_base = table_index * get_state_table_size(g_btb.historySize);
+
+    for (int i = 0; i < (1 << g_btb.historySize); ++i)
+    {
+        g_btb.tableState[table_base + i] = g_btb.beginState;
+    }
 }
 
 size_t get_branch_state(uint32_t pc)
@@ -106,7 +122,31 @@ size_t get_branch_state(uint32_t pc)
     size_t state_index = getStateIndex(pc);
 
     // Only return lowest 2 bytes.
-    return g_btb.tableState[table_base + state_index] & 0x3;
+    return g_btb.tableState[table_base + state_index] & FSM_MASK;
+}
+
+void update_branch_state(uint32_t pc, bool taken)
+{
+    size_t table_index = g_btb.isGlobalTableState ? 0 : getBtbIndex(pc);
+    size_t table_base = table_index * get_state_table_size(g_btb.historySize);
+    size_t state_index = getStateIndex(pc);
+
+    size_t * state = &g_btb.tableState[table_base + state_index];
+    switch (*state & FSM_MASK)
+    {
+        case 0b00:
+            *state = taken ? 0b01 : 0b00;
+            break;
+        case 0b01:
+            *state = taken ? 0b10 : 0b00;
+            break;
+        case 0b10:
+            *state = taken ? 0b11 : 0b01;
+            break;
+        case 0b11:
+            *state = taken ? 0b11 : 0b10;
+            break;
+    }
 }
 
 /**
@@ -128,6 +168,7 @@ initialize_history(
     // If global history, keep only 1 history register.
     size_t history_register_count = isGlobalHist ? 1 : btbSize;
 
+    // Initialize with zero for clean history.
     g_btb.history = calloc(history_register_count, sizeof(size_t));
 
     if (g_btb.history == NULL)
@@ -163,7 +204,7 @@ allocate_states(
     size_t entry_count = isGlobalTable ? 1 : btbSize;
 
     // Allocate the entries - for each entry, allocate table of state machines.
-    g_btb.tableState = malloc(entry_count * state_table_size * sizeof(size_t));
+    g_btb.tableState = malloc(entry_count * state_table_size * sizeof(*g_btb.tableState));
     if (g_btb.tableState == NULL)
     {
         return -1;
@@ -182,14 +223,14 @@ initialize_states(
     unsigned int fsmState,
     bool isGlobalTable)
 {
-    size_t entry_count = isGlobalTable ? 1 : btbSize;
-    size_t state_table_size = get_state_table_size(historySize);
+    size_t table_count = isGlobalTable ? 1 : btbSize;
+    size_t state_count = 1 << historySize;
 
-    for (int i = 0; i < entry_count; ++i)
+    for (int i = 0; i < table_count; ++i)
     {
-        for (int j = 0; j < state_table_size; j++)
+        for (int j = 0; j < state_count; j++)
         {
-            g_btb.tableState[i * state_table_size + j] = fsmState;
+            g_btb.tableState[i * state_count + j] = fsmState;
         }
     }
 }
@@ -208,7 +249,8 @@ int BP_init(
     int return_value;
 
     // Theoretical total_size for each BTB entry.
-    size_t entry_size = 1 + tagSize + INSTRUCTION_SIZE;
+    // Instruction lowest 2 bits are always 0, so don't keep them.
+    size_t entry_size = 1 + tagSize + (INSTRUCTION_SIZE - 2);
 
     // Total size that should be used by the predictor.
     size_t total_size = 0;
@@ -296,6 +338,39 @@ bool BP_predict(uint32_t pc, uint32_t * dst)
 
 void BP_update(uint32_t pc, uint32_t targetPc, bool taken, uint32_t pred_dst)
 {
+    // Update branch count.
+    g_btb.stats.br_num++;
+
+    // Update flush count for mispredicts.
+    if ((taken && pred_dst != targetPc) || (!taken && pc + 4 != pred_dst))
+    {
+        g_btb.stats.flush_num++;
+    }
+
+    btb_entry_t * btb_entry = &g_btb.btbTable[getBtbIndex(pc)];
+    size_t tag = getTagFromPc(g_btb.btbSize, g_btb.tagSize, pc);
+    size_t history_register_index = g_btb.isGlobalHist ? 0 : getBtbIndex(pc);
+
+    // Reset local history register for new entries.
+    if (!g_btb.isGlobalHist && (btb_entry->tag != tag || !btb_entry->valid))
+    {
+        g_btb.history[history_register_index] = 0;
+        // TODO: Not sure if should reset state machines.
+        reset_branch_states(pc);
+    }
+
+    // Update entry.
+    btb_entry->tag = tag;
+    btb_entry->target = targetPc;
+    btb_entry->valid = true;
+
+    // Update history register.
+    g_btb.history[history_register_index] <<= 1;
+    g_btb.history[history_register_index] |= taken ? 1 : 0;
+    g_btb.history[history_register_index] &= (1 << g_btb.historySize) - 1;
+
+    // Update FSM.
+    update_branch_state(pc, taken);
 }
 
 void BP_GetStats(SIM_stats * curStats)
