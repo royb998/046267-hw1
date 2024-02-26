@@ -347,6 +347,7 @@ void BP_update(uint32_t pc, uint32_t targetPc, bool taken, uint32_t pred_dst)
         g_btb.stats.flush_num++;
     }
 
+
     btb_entry_t * btb_entry = &g_btb.btbTable[getBtbIndex(pc)];
     size_t tag = getTagFromPc(g_btb.btbSize, g_btb.tagSize, pc);
     size_t history_register_index = g_btb.isGlobalHist ? 0 : getBtbIndex(pc);
@@ -355,10 +356,12 @@ void BP_update(uint32_t pc, uint32_t targetPc, bool taken, uint32_t pred_dst)
     if (!g_btb.isGlobalHist && (btb_entry->tag != tag || !btb_entry->valid))
     {
         g_btb.history[history_register_index] = 0;
-        // TODO: Not sure if should reset state machines.
-        reset_branch_states(pc);
     }
 
+    if (!g_btb.isGlobalTableState && (btb_entry->tag != tag || !btb_entry->valid))
+    {
+        reset_branch_states(pc);
+    }
     // Update entry.
     btb_entry->tag = tag;
     btb_entry->target = targetPc;
