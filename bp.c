@@ -3,7 +3,6 @@
 
 #include "bp_api.h"
 #include "stdlib.h"
-#include "string.h"
 #include "math.h"
 
 /* ----- Macros ----- */
@@ -160,10 +159,10 @@ void update_branch_state(uint32_t pc, bool taken)
  */
 int
 initialize_history(
-    unsigned int btbSize,
-    unsigned int historySize,
-    bool isGlobalHist,
-    size_t * total_size)
+        unsigned int btbSize,
+        unsigned int historySize,
+        bool isGlobalHist,
+        size_t * total_size)
 {
     // If global history, keep only 1 history register.
     size_t history_register_count = isGlobalHist ? 1 : btbSize;
@@ -193,10 +192,10 @@ initialize_history(
  */
 int
 allocate_states(
-    unsigned int btbSize,
-    unsigned int historySize,
-    bool isGlobalTable,
-    size_t * total_size)
+        unsigned int btbSize,
+        unsigned int historySize,
+        bool isGlobalTable,
+        size_t * total_size)
 {
     size_t state_table_size = 1 << historySize;
 
@@ -218,10 +217,10 @@ allocate_states(
 
 void
 initialize_states(
-    unsigned int btbSize,
-    unsigned int historySize,
-    unsigned int fsmState,
-    bool isGlobalTable)
+        unsigned int btbSize,
+        unsigned int historySize,
+        unsigned int fsmState,
+        bool isGlobalTable)
 {
     size_t table_count = isGlobalTable ? 1 : btbSize;
     size_t state_count = 1 << historySize;
@@ -238,13 +237,13 @@ initialize_states(
 /* ----- External methods ----- */
 
 int BP_init(
-    unsigned btbSize,
-    unsigned historySize,
-    unsigned tagSize,
-    unsigned fsmState,
-    bool isGlobalHist,
-    bool isGlobalTable,
-    int Shared)
+        unsigned btbSize,
+        unsigned historySize,
+        unsigned tagSize,
+        unsigned fsmState,
+        bool isGlobalHist,
+        bool isGlobalTable,
+        int Shared)
 {
     int return_value;
 
@@ -347,6 +346,7 @@ void BP_update(uint32_t pc, uint32_t targetPc, bool taken, uint32_t pred_dst)
         g_btb.stats.flush_num++;
     }
 
+
     btb_entry_t * btb_entry = &g_btb.btbTable[getBtbIndex(pc)];
     size_t tag = getTagFromPc(g_btb.btbSize, g_btb.tagSize, pc);
     size_t history_register_index = g_btb.isGlobalHist ? 0 : getBtbIndex(pc);
@@ -355,7 +355,11 @@ void BP_update(uint32_t pc, uint32_t targetPc, bool taken, uint32_t pred_dst)
     if (!g_btb.isGlobalHist && (btb_entry->tag != tag || !btb_entry->valid))
     {
         g_btb.history[history_register_index] = 0;
-        // TODO: Not sure if should reset state machines.
+    }
+
+    // reset branch states if table state is local for new entries
+    if (!g_btb.isGlobalTableState && (btb_entry->tag != tag || !btb_entry->valid))
+    {
         reset_branch_states(pc);
     }
 
